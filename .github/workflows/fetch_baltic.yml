@@ -2,7 +2,7 @@ name: Fetch Baltic Capesize Data
 
 on:
   schedule:
-    - cron: "30 9 * * 1-5"
+    - cron: "30 9 * * *"
   workflow_dispatch:
 
 permissions:

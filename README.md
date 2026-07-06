@@ -2,19 +2,23 @@
 
 GitHub Actions data pipeline for Baltic Exchange Capesize market data.
 
-The first-stage pipeline fetches C5TC plus Capesize route values C3 and C5 from the Baltic API, calculates C3/C5 ratio and C3 minus C5, then publishes the latest record and a daily history file in this repository.
+The pipeline uses the current Baltic API feed `FDSZ5H4HS31QCF5TN6OLWZJMBBC1QPIU` as its only data source. It expands every `shortCode` series into columns, keeps a cumulative history, and writes the latest available day as JSON.
+
+## Fetch Rules
+
+- First run: fetches the latest 3 months of data to initialize history.
+- Later runs: fetches a rolling 14-day window and merges it into `data/cape_daily.csv`.
+- Existing history is preserved. Rows are deduplicated by `date`, keeping the newest values.
+- If the API latest date is not newer than the local latest date, the run exits normally and logs `No new data`.
+- Missing core fields produce warnings, not a crash.
 
 ## Outputs
 
-- `data/cape_latest.json`: latest normalized Baltic Capesize record.
-- `data/cape_daily.csv`: date-sorted daily history. If the same date is fetched again, the latest record replaces the older row.
-- `logs/fetch_log.txt`: successful fetch log entries. It does not contain the API key.
+- `data/cape_daily.csv`: cumulative date-sorted history.
+- `data/cape_latest.json`: latest row from the cumulative history.
+- `logs/fetch_log.txt`: run status log. It does not contain the API key.
 
-Output fields:
-
-```text
-date,C5TC,C3,C5,C3_C5_ratio,C3_minus_C5,source,fetch_time
-```
+Core output columns appear first, followed by derived metrics, then any other Baltic `shortCode` columns in alphabetical order, then `fetch_time`.
 
 ## GitHub Secrets
 
@@ -29,11 +33,7 @@ Do not commit `.env`, `.streamlit/secrets.toml`, or any real API key.
 
 ## GitHub Actions
 
-The workflow runs every weekday at 09:30 UTC:
-
-```yaml
-cron: "30 9 * * 1-5"
-```
+The workflow runs daily at 09:30 UTC and also supports manual runs.
 
 To run it manually:
 
@@ -43,19 +43,13 @@ To run it manually:
 
 ## Local Test
 
-Install dependencies and run the pipeline with an environment variable:
-
 ```powershell
 pip install -r requirements.txt
 $env:BALTIC_API_KEY="your_api_key_here"
 python scripts/main.py
 ```
 
-The script exits with a non-zero status if the API request, transformation, or validation fails. Existing data is not overwritten until validation has passed.
-
 ## Raw Data Links
-
-ChatGPT or other clients should read one of these raw files after the workflow has run:
 
 - JSON latest: [data/cape_latest.json](https://raw.githubusercontent.com/mymvigor/cape_market_data/main/data/cape_latest.json)
 - CSV history: [data/cape_daily.csv](https://raw.githubusercontent.com/mymvigor/cape_market_data/main/data/cape_daily.csv)

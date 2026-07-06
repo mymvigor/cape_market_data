@@ -1,2 +1,6 @@
+<<<<<<< Updated upstream
 date,C5TC,C3,C5,C3_C5_ratio,C3_minus_C5,source,fetch_time
 2026-07-06,35575.0,34029.0,33198.0,1.025,831.0,Baltic API,2026-07-06T13:46:59Z
+=======
+date,C5TC (182),C5TC,BCI,C16_182,C3,C5,C3-TCE,C5-TCE,C3_minus_C5,C3_div_C5,C3_TCE_minus_C5_TCE,C3_TCE_div_C5_TCE,C3_TCE_div_C5TC_182,C5_TCE_div_C5TC_182,fetch_time
+>>>>>>> Stashed changes

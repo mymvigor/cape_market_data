@@ -1,17 +1,18 @@
-from typing import Any
+import pandas as pd
+
+from transform_data import CORE_COLUMNS
 
 
-def validate_data(record: dict[str, Any]) -> None:
-    if not record.get("date"):
-        raise RuntimeError("Validation failed: date is missing")
+def validate_data(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        raise RuntimeError("Validation failed: no rows returned from Baltic API")
+    if "date" not in frame.columns:
+        raise RuntimeError("Validation failed: date column is missing")
 
-    for field in ("C5TC", "C3", "C5"):
-        if field not in record:
-            raise RuntimeError(f"Validation failed: {field} is missing")
-        if record[field] is None:
-            raise RuntimeError(f"Validation failed: {field} is null")
-        if float(record[field]) <= 0:
-            raise RuntimeError(f"Validation failed: {field} must be positive")
+    dates = pd.to_datetime(frame["date"], errors="coerce")
+    if dates.isna().all():
+        raise RuntimeError("Validation failed: all date values are invalid")
 
-    if float(record["C5"]) == 0:
-        raise RuntimeError("Validation failed: C5 must not be zero")
+    missing = [column for column in CORE_COLUMNS if column not in frame.columns]
+    if missing:
+        print(f"Warning: core columns missing after transform: {missing}")
