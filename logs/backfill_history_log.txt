@@ -49,3 +49,27 @@
 2026-07-06T16:42:53+00:00Z Initialized main daily file /home/runner/work/cape_market_data/cape_market_data/data/cape_daily.csv rows=394
 2026-07-06T16:42:53+00:00Z Wrote latest file /home/runner/work/cape_market_data/cape_market_data/data/cape_latest.json
 2026-07-06T16:42:53+00:00Z Backfill completed with no missing windows
+2026-07-06T16:43:35+00:00Z Starting backfill feed=FDSZ5H4HS31QCF5TN6OLWZJMBBC1QPIU windows=17 start=2023-01-01 end=2026-07-06
+2026-07-06T16:43:38+00:00Z Fetched window 2023-01-01 to 2023-04-01 rows=622
+2026-07-06T16:43:40+00:00Z Fetched window 2023-03-17 to 2023-06-15 rows=586
+2026-07-06T16:43:42+00:00Z Fetched window 2023-05-31 to 2023-08-29 rows=618
+2026-07-06T16:43:45+00:00Z Fetched window 2023-08-14 to 2023-11-12 rows=620
+2026-07-06T16:43:47+00:00Z Fetched window 2023-10-28 to 2024-01-26 rows=569
+2026-07-06T16:43:49+00:00Z Fetched window 2024-01-11 to 2024-04-10 rows=609
+2026-07-06T16:43:51+00:00Z Fetched window 2024-03-26 to 2024-06-24 rows=591
+2026-07-06T16:43:53+00:00Z Fetched window 2024-06-09 to 2024-09-07 rows=645
+2026-07-06T16:43:56+00:00Z Fetched window 2024-08-23 to 2024-11-21 rows=919
+2026-07-06T16:43:58+00:00Z Fetched window 2024-11-06 to 2025-02-04 rows=892
+2026-07-06T16:43:59+00:00Z Fetched window 2025-01-20 to 2025-04-20 rows=959
+2026-07-06T16:44:00+00:00Z Fetched window 2025-04-05 to 2025-07-04 rows=926
+2026-07-06T16:44:01+00:00Z Fetched window 2025-06-19 to 2025-09-17 rows=962
+2026-07-06T16:44:03+00:00Z Fetched window 2025-09-02 to 2025-12-01 rows=976
+2026-07-06T16:44:04+00:00Z Fetched window 2025-11-16 to 2026-02-14 rows=939
+2026-07-06T16:44:05+00:00Z Fetched window 2026-01-30 to 2026-04-30 rows=1010
+2026-07-06T16:44:06+00:00Z Fetched window 2026-04-15 to 2026-07-06 rows=920
+2026-07-06T16:44:06+00:00Z Calendar alignment missing_days_count=36 forward_filled_ratio=0.101407
+2026-07-06T16:44:06+00:00Z Wrote /home/runner/work/cape_market_data/cape_market_data/data/cape_history_raw.csv rows=880
+2026-07-06T16:44:06+00:00Z Wrote /home/runner/work/cape_market_data/cape_market_data/data/cape_history_filled.csv rows=916
+2026-07-06T16:44:06+00:00Z Initialized main daily file /home/runner/work/cape_market_data/cape_market_data/data/cape_daily.csv rows=916
+2026-07-06T16:44:06+00:00Z Wrote latest file /home/runner/work/cape_market_data/cape_market_data/data/cape_latest.json
+2026-07-06T16:44:06+00:00Z Backfill completed with no missing windows
