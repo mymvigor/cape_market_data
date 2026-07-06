@@ -111,20 +111,33 @@ def _extract_route_dataframe(payload: Any) -> pd.DataFrame:
     route_frame = _payload_to_dataframe(payload, "route")
     print(f"Debug: route DataFrame columns={list(route_frame.columns)}")
 
-    required = {"code", "data"}
-    missing = required - set(route_frame.columns)
-    if missing:
-        raise RuntimeError(f"Baltic API route DataFrame missing columns: {sorted(missing)}")
+    if "data" not in route_frame.columns:
+        raise RuntimeError(
+            "Baltic API route DataFrame missing data column; "
+            f"actual columns={list(route_frame.columns)}"
+        )
 
     return route_frame
+
+
+def _select_route_code_column(route_frame: pd.DataFrame) -> str:
+    for column in ("shortCode", "code", "apiIdentifier"):
+        if column in route_frame.columns:
+            print(f"Debug: route code column={column}")
+            return column
+    raise RuntimeError(
+        "Baltic API route DataFrame missing route code column; "
+        f"actual columns={list(route_frame.columns)}"
+    )
 
 
 def _join_route_data(main: pd.DataFrame, route_frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     merged = main.copy()
     route_codes: list[str] = []
+    code_column = _select_route_code_column(route_frame)
 
     for _, row in route_frame.iterrows():
-        code = row["code"]
+        code = row[code_column]
         if pd.isna(code):
             continue
         code = str(code)
@@ -147,6 +160,28 @@ def _join_route_data(main: pd.DataFrame, route_frame: pd.DataFrame) -> tuple[pd.
         merged = merged.join(route_data, how="outer")
 
     return merged.sort_index(), route_codes
+
+
+def _find_route_column(columns: pd.Index, route_code: str) -> str:
+    names = [str(column) for column in columns]
+    if route_code in names:
+        return route_code
+
+    matches = [name for name in names if name.startswith(route_code) and name != "C5TC"]
+    if matches:
+        return matches[0]
+
+    raise RuntimeError(f"Baltic API merged data missing {route_code}; available columns={names}")
+
+
+def _standardize_route_columns(merged: pd.DataFrame, route_codes: list[str]) -> pd.DataFrame:
+    merged = merged.copy()
+    for route_code in ("C3", "C5"):
+        source_column = _find_route_column(merged.columns, route_code)
+        if source_column != route_code:
+            print(f"Debug: mapping {source_column} to {route_code}")
+            merged[route_code] = merged[source_column]
+    return merged
 
 
 def fetch_baltic_data() -> dict[str, Any]:
@@ -174,6 +209,7 @@ def fetch_baltic_data() -> dict[str, Any]:
 
     print(f"Debug: route codes list={route_codes}")
     print(f"Debug: merged DataFrame columns={list(merged.reset_index().columns)}")
+    merged = _standardize_route_columns(merged, route_codes)
 
     missing_output_columns = {"C5TC", "C3", "C5"} - set(merged.columns)
     if missing_output_columns:
