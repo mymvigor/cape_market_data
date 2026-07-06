@@ -1,0 +1,11 @@
+2026-07-06T16:17:59+00:00Z Starting backfill feed=FDSZ5H4HS31QCF5TN6OLWZJMBBC1QPIU windows=8 start=2025-01-01 end=2026-07-06
+2026-07-06T16:18:02+00:00Z Fetched window 2025-01-01 to 2025-04-01 rows=962
+2026-07-06T16:18:04+00:00Z Fetched window 2025-03-17 to 2025-06-15 rows=917
+2026-07-06T16:18:06+00:00Z Fetched window 2025-05-31 to 2025-08-29 rows=965
+2026-07-06T16:18:07+00:00Z Fetched window 2025-08-14 to 2025-11-12 rows=965
+2026-07-06T16:18:09+00:00Z Fetched window 2025-10-28 to 2026-01-26 rows=907
+2026-07-06T16:18:11+00:00Z Fetched window 2026-01-11 to 2026-04-11 rows=1007
+2026-07-06T16:18:11+00:00Z Fetched window 2026-03-27 to 2026-06-25 rows=984
+2026-07-06T16:18:12+00:00Z Fetched window 2026-06-10 to 2026-07-06 rows=342
+2026-07-06T16:18:12+00:00Z Wrote /home/runner/work/cape_market_data/cape_market_data/data/cape_history.csv rows=381
+2026-07-06T16:18:12+00:00Z Backfill completed with no missing windows
