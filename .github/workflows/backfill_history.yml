@@ -1,0 +1,58 @@
+name: Backfill Cape History
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Backfill start date"
+        required: true
+        default: "2025-01-01"
+      parquet:
+        description: "Also write data/cape_history.parquet"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  backfill-history:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Backfill Cape history
+        run: |
+          CMD="python scripts/backfill_history.py --start ${{ inputs.start_date }}"
+          if [ "${{ inputs.parquet }}" = "true" ]; then
+            CMD="$CMD --parquet"
+          fi
+          $CMD
+        env:
+          BALTIC_API_KEY: ${{ secrets.BALTIC_API_KEY }}
+
+      - name: Commit backfilled history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/cape_history.csv logs/backfill_history_log.txt
+          if [ -f data/cape_history.parquet ]; then
+            git add data/cape_history.parquet
+          fi
+          if git diff --staged --quiet; then
+            echo "No backfill changes to commit."
+          else
+            git commit -m "Backfill Cape history"
+            git push
+          fi
