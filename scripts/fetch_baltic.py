@@ -18,8 +18,9 @@ def _existing_latest_date() -> pd.Timestamp | None:
         return None
 
     try:
-        daily = pd.read_csv(DAILY_CSV, usecols=["date"])
-    except (ValueError, pd.errors.EmptyDataError):
+        daily = pd.read_csv(DAILY_CSV, usecols=["date"], engine="python", on_bad_lines="skip")
+    except Exception as exc:
+        print(f"Warning: unable to read existing cape_daily.csv for fetch window; treating as first run: {exc}")
         return None
 
     if daily.empty:
