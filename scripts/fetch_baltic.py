@@ -79,25 +79,77 @@ def _extract_main_series(payload: Any, value_name: str) -> pd.DataFrame:
     raise RuntimeError(f"Baltic API payload missing data array for {value_name}")
 
 
-def _extract_route_series(payload: Any, route_codes: tuple[str, ...]) -> pd.DataFrame:
+def _payload_to_frame_candidates(payload: Any) -> list[pd.DataFrame]:
+    candidates: list[pd.DataFrame] = []
+
+    if isinstance(payload, list):
+        candidates.append(pd.DataFrame(payload))
+    elif isinstance(payload, dict):
+        for key in ("data", "results", "feeds", "items"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                candidates.append(pd.DataFrame(value))
+        candidates.append(pd.DataFrame([payload]))
+    else:
+        raise RuntimeError(f"Unexpected Baltic API payload type: {type(payload).__name__}")
+
+    return [frame for frame in candidates if not frame.empty]
+
+
+def _standardize_route_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    if "Date" in frame.columns:
+        frame = frame.rename(columns={"Date": "date"})
+    if "date" not in frame.columns:
+        raise RuntimeError("Baltic API Capesize route payload missing Date/date column")
+
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
+    for column in ("C5TC", "C3", "C5"):
+        if column not in frame.columns:
+            raise RuntimeError(f"Baltic API Capesize route payload missing column: {column}")
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+
+    frame = frame[["date", "C5TC", "C3", "C5"]].dropna(subset=["date", "C5TC", "C3", "C5"])
+    if frame.empty:
+        raise RuntimeError("Baltic API Capesize route payload contained no valid C5TC/C3/C5 rows")
+
+    return frame.drop_duplicates(subset=["date"], keep="last").set_index("date").sort_index()
+
+
+def _nested_routes_to_wide_frame(payload: Any) -> pd.DataFrame:
     rows = _payload_to_rows(payload)
     route_frames: list[pd.DataFrame] = []
 
     for row in rows:
         code = row.get("code")
-        if code not in route_codes:
+        if not code or not isinstance(row.get("data"), list):
             continue
-        route_frames.append(_series_from_data(row.get("data"), code))
+        route_frames.append(_series_from_data(row["data"], str(code)))
 
-    found = {frame.columns[0] for frame in route_frames}
-    missing = set(route_codes) - found
-    if missing:
-        raise RuntimeError(f"Baltic API Capesize route payload missing route codes: {sorted(missing)}")
+    if not route_frames:
+        raise RuntimeError("Baltic API Capesize route payload is neither a wide table nor a nested route payload")
 
-    combined = route_frames[0]
+    wide = route_frames[0]
     for frame in route_frames[1:]:
-        combined = combined.join(frame, how="outer")
-    return combined
+        wide = wide.join(frame, how="outer")
+    return wide.reset_index()
+
+
+def _extract_cape_route_frame(payload: Any) -> pd.DataFrame:
+    first_error: Exception | None = None
+    for frame in _payload_to_frame_candidates(payload):
+        try:
+            return _standardize_route_frame(frame)
+        except RuntimeError as exc:
+            if first_error is None:
+                first_error = exc
+
+    try:
+        return _standardize_route_frame(_nested_routes_to_wide_frame(payload))
+    except RuntimeError as exc:
+        if first_error is not None:
+            raise RuntimeError(f"{first_error}; nested parse also failed: {exc}") from exc
+        raise
 
 
 def fetch_baltic_data() -> dict[str, Any]:
@@ -116,14 +168,15 @@ def fetch_baltic_data() -> dict[str, Any]:
     c5tc_payload = _request_feed(C5TC_URL, headers, params)
     routes_payload = _request_feed(CAPE_ROUTES_URL, headers, params)
 
-    c5tc = _extract_main_series(c5tc_payload, "C5TC")
-    routes = _extract_route_series(routes_payload, ("C3", "C5"))
-    merged = c5tc.join(routes, how="inner").dropna(subset=["C5TC", "C3", "C5"])
-    if merged.empty:
-        raise RuntimeError("Baltic API returned no common dates with C5TC, C3, and C5")
+    _extract_main_series(c5tc_payload, "C5TC")
+    routes = _extract_cape_route_frame(routes_payload)
+    print(f"Debug: route DataFrame columns={list(routes.reset_index().columns)}")
+    if routes.empty:
+        raise RuntimeError("Baltic API returned no valid Capesize route rows")
 
-    latest_date = max(merged.index)
-    latest = merged.loc[latest_date]
+    latest_date = max(routes.index)
+    print(f"Debug: latest route date={latest_date.isoformat()}")
+    latest = routes.loc[latest_date]
     return {
         "date": latest_date.isoformat(),
         "C5TC": latest["C5TC"],
