@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 LOGS_DIR = ROOT / "logs"
 HISTORY_CSV = DATA_DIR / "cape_history.csv"
+HISTORY_RAW_CSV = DATA_DIR / "cape_history_raw.csv"
+HISTORY_FILLED_CSV = DATA_DIR / "cape_history_filled.csv"
 HISTORY_PARQUET = DATA_DIR / "cape_history.parquet"
 BACKFILL_LOG = LOGS_DIR / "backfill_history_log.txt"
 
@@ -150,28 +152,70 @@ def order_columns(frame: pd.DataFrame) -> list[str]:
     return ["date"] + CORE_COLUMNS + DERIVED_COLUMNS + extras
 
 
-def long_to_history(long: pd.DataFrame) -> pd.DataFrame:
+def raw_order_columns(frame: pd.DataFrame) -> list[str]:
+    extras = sorted(column for column in frame.columns if column not in {"date"} | set(CORE_COLUMNS))
+    return ["date"] + CORE_COLUMNS + extras
+
+
+def long_to_raw_history(long: pd.DataFrame) -> pd.DataFrame:
     if long.empty:
         raise RuntimeError("No history rows were fetched")
 
     deduped = long.drop_duplicates(subset=["date", "shortCode"], keep="last")
     wide = deduped.pivot(index="date", columns="shortCode", values="value").reset_index()
     wide.columns.name = None
-    wide = calculate_derived(wide)
-    wide = wide.reindex(columns=order_columns(wide)).sort_values("date")
-    return wide
+    for column in CORE_COLUMNS:
+        if column not in wide.columns:
+            wide[column] = pd.NA
+    return wide.reindex(columns=raw_order_columns(wide)).sort_values("date")
 
 
-def write_outputs(history: pd.DataFrame, write_parquet: bool) -> None:
+def fill_history(raw_history: pd.DataFrame, calendar_start: pd.Timestamp) -> tuple[pd.DataFrame, dict[str, float]]:
+    raw = raw_history.copy()
+    raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+    raw = raw.dropna(subset=["date"]).sort_values("date")
+    if raw.empty:
+        raise RuntimeError("Raw history has no valid dates")
+
+    latest = raw["date"].max()
+    calendar = pd.bdate_range(start=calendar_start.normalize(), end=latest.normalize())
+    raw_indexed = raw.set_index("date").sort_index()
+    raw_indexed.index = pd.to_datetime(raw_indexed.index)
+
+    missing_days_count = int(len(calendar.difference(raw_indexed.index.normalize().unique())))
+    reindexed = raw_indexed.reindex(calendar)
+    pre_fill_missing = int(reindexed.isna().sum().sum())
+    filled = reindexed.ffill()
+    post_fill_missing = int(filled.isna().sum().sum())
+    filled_cells = max(pre_fill_missing - post_fill_missing, 0)
+    total_cells = int(filled.shape[0] * filled.shape[1])
+    forward_filled_ratio = filled_cells / total_cells if total_cells else 0.0
+
+    filled = filled.reset_index().rename(columns={"index": "date"})
+    filled["date"] = filled["date"].dt.date.astype(str)
+    filled = calculate_derived(filled)
+    filled = filled.reindex(columns=order_columns(filled)).sort_values("date")
+    metrics = {
+        "missing_days_count": missing_days_count,
+        "forward_filled_ratio": forward_filled_ratio,
+    }
+    return filled, metrics
+
+
+def write_outputs(raw_history: pd.DataFrame, filled_history: pd.DataFrame, write_parquet: bool) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    history.to_csv(HISTORY_CSV, index=False)
-    log(f"Wrote {HISTORY_CSV} rows={len(history)}")
+    raw_history.to_csv(HISTORY_RAW_CSV, index=False)
+    filled_history.to_csv(HISTORY_FILLED_CSV, index=False)
+    filled_history.to_csv(HISTORY_CSV, index=False)
+    log(f"Wrote {HISTORY_RAW_CSV} rows={len(raw_history)}")
+    log(f"Wrote {HISTORY_FILLED_CSV} rows={len(filled_history)}")
+    log(f"Wrote legacy alias {HISTORY_CSV} rows={len(filled_history)}")
 
     if not write_parquet:
         return
 
     try:
-        history.to_parquet(HISTORY_PARQUET, index=False)
+        filled_history.to_parquet(HISTORY_PARQUET, index=False)
         log(f"Wrote {HISTORY_PARQUET}")
     except Exception as exc:
         log(f"Warning: parquet write skipped: {exc}")
@@ -217,8 +261,14 @@ def main() -> int:
         raise RuntimeError("All backfill windows failed")
 
     all_long = pd.concat(window_frames, ignore_index=True)
-    history = long_to_history(all_long)
-    write_outputs(history, args.parquet)
+    raw_history = long_to_raw_history(all_long)
+    filled_history, fill_metrics = fill_history(raw_history, start)
+    log(
+        "Calendar alignment "
+        f"missing_days_count={fill_metrics['missing_days_count']} "
+        f"forward_filled_ratio={fill_metrics['forward_filled_ratio']:.6f}"
+    )
+    write_outputs(raw_history, filled_history, args.parquet)
 
     if missing_windows:
         log(f"Backfill completed with missing windows: {missing_windows}")
