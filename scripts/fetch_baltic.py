@@ -51,6 +51,29 @@ def _payload_to_rows(payload: Any) -> list[dict[str, Any]]:
     raise RuntimeError(f"Unexpected Baltic API payload type: {type(payload).__name__}")
 
 
+def _list_from_payload(payload: Any, label: str) -> list[Any]:
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        preferred_keys = ("data", "rows", "results", "feeds", "items")
+        for key in preferred_keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        for value in payload.values():
+            if isinstance(value, list):
+                return value
+    raise RuntimeError(f"Baltic API {label} payload does not contain a list")
+
+
+def _payload_to_dataframe(payload: Any, label: str) -> pd.DataFrame:
+    rows = _list_from_payload(payload, label)
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        raise RuntimeError(f"Baltic API {label} payload produced an empty DataFrame")
+    return frame
+
+
 def _series_from_data(data: Any, value_name: str) -> pd.DataFrame:
     if not isinstance(data, list) or not data:
         raise RuntimeError(f"Baltic API missing non-empty data array for {value_name}")
@@ -72,84 +95,58 @@ def _series_from_data(data: Any, value_name: str) -> pd.DataFrame:
 
 
 def _extract_main_series(payload: Any, value_name: str) -> pd.DataFrame:
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        data = payload["data"]
+        if data and isinstance(data[0], dict) and {"date", "value"} <= set(data[0]):
+            return _series_from_data(data, value_name)
+
     rows = _payload_to_rows(payload)
     for row in rows:
         if isinstance(row.get("data"), list):
             return _series_from_data(row["data"], value_name)
-    raise RuntimeError(f"Baltic API payload missing data array for {value_name}")
+    raise RuntimeError(f"Baltic API main payload missing data array for {value_name}")
 
 
-def _payload_to_frame_candidates(payload: Any) -> list[pd.DataFrame]:
-    candidates: list[pd.DataFrame] = []
+def _extract_route_dataframe(payload: Any) -> pd.DataFrame:
+    route_frame = _payload_to_dataframe(payload, "route")
+    print(f"Debug: route DataFrame columns={list(route_frame.columns)}")
 
-    if isinstance(payload, list):
-        candidates.append(pd.DataFrame(payload))
-    elif isinstance(payload, dict):
-        for key in ("data", "results", "feeds", "items"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                candidates.append(pd.DataFrame(value))
-        candidates.append(pd.DataFrame([payload]))
-    else:
-        raise RuntimeError(f"Unexpected Baltic API payload type: {type(payload).__name__}")
+    required = {"code", "data"}
+    missing = required - set(route_frame.columns)
+    if missing:
+        raise RuntimeError(f"Baltic API route DataFrame missing columns: {sorted(missing)}")
 
-    return [frame for frame in candidates if not frame.empty]
+    return route_frame
 
 
-def _standardize_route_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    frame = frame.copy()
-    if "Date" in frame.columns:
-        frame = frame.rename(columns={"Date": "date"})
-    if "date" not in frame.columns:
-        raise RuntimeError("Baltic API Capesize route payload missing Date/date column")
+def _join_route_data(main: pd.DataFrame, route_frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    merged = main.copy()
+    route_codes: list[str] = []
 
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
-    for column in ("C5TC", "C3", "C5"):
-        if column not in frame.columns:
-            raise RuntimeError(f"Baltic API Capesize route payload missing column: {column}")
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-    frame = frame[["date", "C5TC", "C3", "C5"]].dropna(subset=["date", "C5TC", "C3", "C5"])
-    if frame.empty:
-        raise RuntimeError("Baltic API Capesize route payload contained no valid C5TC/C3/C5 rows")
-
-    return frame.drop_duplicates(subset=["date"], keep="last").set_index("date").sort_index()
-
-
-def _nested_routes_to_wide_frame(payload: Any) -> pd.DataFrame:
-    rows = _payload_to_rows(payload)
-    route_frames: list[pd.DataFrame] = []
-
-    for row in rows:
-        code = row.get("code")
-        if not code or not isinstance(row.get("data"), list):
+    for _, row in route_frame.iterrows():
+        code = row["code"]
+        if pd.isna(code):
             continue
-        route_frames.append(_series_from_data(row["data"], str(code)))
+        code = str(code)
+        route_codes.append(code)
 
-    if not route_frames:
-        raise RuntimeError("Baltic API Capesize route payload is neither a wide table nor a nested route payload")
+        if not isinstance(row["data"], list):
+            raise RuntimeError(f"Baltic API route data for {code} is not a list")
+        route_data = pd.DataFrame(row["data"])
+        missing = {"date", "value"} - set(route_data.columns)
+        if missing:
+            raise RuntimeError(f"Baltic API route data for {code} missing fields: {sorted(missing)}")
 
-    wide = route_frames[0]
-    for frame in route_frames[1:]:
-        wide = wide.join(frame, how="outer")
-    return wide.reset_index()
+        route_data = route_data[["date", "value"]].copy()
+        route_data["date"] = pd.to_datetime(route_data["date"], errors="coerce").dt.date
+        route_data[code] = pd.to_numeric(route_data["value"], errors="coerce")
+        route_data = route_data.drop(columns=["value"]).dropna(subset=["date", code])
+        if route_data.empty:
+            continue
+        route_data = route_data.drop_duplicates(subset=["date"], keep="last").set_index("date")
+        merged = merged.join(route_data, how="outer")
 
-
-def _extract_cape_route_frame(payload: Any) -> pd.DataFrame:
-    first_error: Exception | None = None
-    for frame in _payload_to_frame_candidates(payload):
-        try:
-            return _standardize_route_frame(frame)
-        except RuntimeError as exc:
-            if first_error is None:
-                first_error = exc
-
-    try:
-        return _standardize_route_frame(_nested_routes_to_wide_frame(payload))
-    except RuntimeError as exc:
-        if first_error is not None:
-            raise RuntimeError(f"{first_error}; nested parse also failed: {exc}") from exc
-        raise
+    return merged.sort_index(), route_codes
 
 
 def fetch_baltic_data() -> dict[str, Any]:
@@ -168,15 +165,33 @@ def fetch_baltic_data() -> dict[str, Any]:
     c5tc_payload = _request_feed(C5TC_URL, headers, params)
     routes_payload = _request_feed(CAPE_ROUTES_URL, headers, params)
 
-    _extract_main_series(c5tc_payload, "C5TC")
-    routes = _extract_cape_route_frame(routes_payload)
-    print(f"Debug: route DataFrame columns={list(routes.reset_index().columns)}")
-    if routes.empty:
-        raise RuntimeError("Baltic API returned no valid Capesize route rows")
+    print(f"Debug: main payload type={type(c5tc_payload).__name__}")
+    print(f"Debug: route payload type={type(routes_payload).__name__}")
 
-    latest_date = max(routes.index)
-    print(f"Debug: latest route date={latest_date.isoformat()}")
-    latest = routes.loc[latest_date]
+    main = _extract_main_series(c5tc_payload, "C5TC")
+    route_frame = _extract_route_dataframe(routes_payload)
+    merged, route_codes = _join_route_data(main, route_frame)
+
+    print(f"Debug: route codes list={route_codes}")
+    print(f"Debug: merged DataFrame columns={list(merged.reset_index().columns)}")
+
+    missing_output_columns = {"C5TC", "C3", "C5"} - set(merged.columns)
+    if missing_output_columns:
+        raise RuntimeError(
+            "Baltic API merged data missing required columns "
+            f"{sorted(missing_output_columns)}; actual route codes list={route_codes}"
+        )
+
+    valid = merged.dropna(subset=["C5TC", "C3", "C5"])
+    if valid.empty:
+        raise RuntimeError(
+            "Baltic API returned no rows with C5TC, C3, and C5 all present; "
+            f"actual route codes list={route_codes}"
+        )
+
+    latest_date = max(valid.index)
+    print(f"Debug: latest date={latest_date.isoformat()}")
+    latest = valid.loc[latest_date]
     return {
         "date": latest_date.isoformat(),
         "C5TC": latest["C5TC"],
