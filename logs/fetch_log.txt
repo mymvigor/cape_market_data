@@ -1,3 +1,6 @@
 
 2026-07-06T13:24:33Z success date=2026-07-06 source=Baltic API
 2026-07-06T13:46:59Z success date=2026-07-06 source=Baltic API
+2026-07-06T16:00:07+00:00Z Warning: archived legacy cape_daily.csv to /home/runner/work/cape_market_data/cape_market_data/data/archive/cape_daily_legacy_20260706_160007.csv (read_csv failed: Error tokenizing data. C error: Expected 8 fields in line 5, saw 16
+)
+2026-07-06T16:00:07Z success latest_date=2026-07-06 rows=66
