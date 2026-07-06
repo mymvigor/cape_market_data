@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from transform_data import CORE_COLUMNS, output_columns
+from cape_transform import CORE_COLUMNS, finalize_daily_from_long, merge_existing_with_new
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +88,8 @@ def save_data(frame: pd.DataFrame, metadata: dict[str, Any] | None = None) -> di
 
     incoming = frame.copy()
     incoming["date"] = pd.to_datetime(incoming["date"], errors="coerce").dt.date.astype(str)
-    incoming = incoming.dropna(subset=["date"])
+    incoming["value"] = pd.to_numeric(incoming["value"], errors="coerce")
+    incoming = incoming.dropna(subset=["date", "shortCode"])
     if incoming.empty:
         raise RuntimeError("No parseable incoming rows to save")
 
@@ -97,27 +98,30 @@ def save_data(frame: pd.DataFrame, metadata: dict[str, Any] | None = None) -> di
         existing["date"] = pd.to_datetime(existing["date"], errors="coerce").dt.date.astype(str)
         existing = existing.dropna(subset=["date"])
         existing_latest = pd.to_datetime(existing["date"], errors="coerce").max()
+        calendar_start = pd.to_datetime(existing["date"], errors="coerce").min()
     else:
         existing_latest = pd.NaT
+        calendar_start = pd.to_datetime(incoming["date"], errors="coerce").min()
 
     incoming_latest = pd.to_datetime(incoming["date"], errors="coerce").max()
-    fetch_time = str(incoming["fetch_time"].dropna().iloc[-1]) if "fetch_time" in incoming.columns and not incoming["fetch_time"].dropna().empty else ""
+    fetch_time = pd.Timestamp.utcnow().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     if not archived_legacy and not pd.isna(existing_latest) and incoming_latest <= existing_latest:
         latest = _write_latest(existing)
         with FETCH_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(f"{fetch_time} No new data latest_api_date={incoming_latest.date()} latest_local_date={existing_latest.date()}\n")
-        print("No new data")
+            handle.write(f"{fetch_time} No new Baltic data latest_api_date={incoming_latest.date()} latest_local_date={existing_latest.date()}\n")
+        print("No new Baltic data")
         return {"status": "no_new_data", "latest": latest}
 
-    combined = pd.concat([existing, incoming], ignore_index=True, sort=False)
-    combined["date"] = pd.to_datetime(combined["date"], errors="coerce").dt.date.astype(str)
-    combined = combined.dropna(subset=["date"])
-    combined = combined.drop_duplicates(subset=["date"], keep="last").sort_values("date")
-    combined = combined.reindex(columns=output_columns(combined))
-    combined.to_csv(DAILY_CSV, index=False)
+    combined_long = merge_existing_with_new(existing, incoming)
+    daily, metrics = finalize_daily_from_long(combined_long, calendar_start=calendar_start, fetch_time=fetch_time)
+    daily.to_csv(DAILY_CSV, index=False)
 
-    latest = _write_latest(combined)
+    latest = _write_latest(daily)
     with FETCH_LOG.open("a", encoding="utf-8") as handle:
-        handle.write(f"{fetch_time} success latest_date={latest['date']} rows={len(combined)}\n")
+        handle.write(
+            f"{fetch_time} success latest_date={latest['date']} rows={len(daily)} "
+            f"missing_days_count={metrics['missing_days_count']} "
+            f"forward_filled_ratio={metrics['forward_filled_ratio']:.6f}\n"
+        )
     return {"status": "updated", "latest": latest}

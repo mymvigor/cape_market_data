@@ -46,7 +46,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/cape_history.csv data/cape_history_raw.csv data/cape_history_filled.csv logs/backfill_history_log.txt
+          git add data/cape_daily.csv data/cape_latest.json data/cape_history_raw.csv data/cape_history_filled.csv logs/backfill_history_log.txt
           if [ -f data/cape_history.parquet ]; then
             git add data/cape_history.parquet
           fi

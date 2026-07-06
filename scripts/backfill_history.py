@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import time
 from datetime import date
@@ -7,11 +8,18 @@ from typing import Any
 
 import pandas as pd
 
+from cape_transform import (
+    expand_api_payload_to_long,
+    finalize_daily_from_long,
+    pivot_to_wide,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 LOGS_DIR = ROOT / "logs"
-HISTORY_CSV = DATA_DIR / "cape_history.csv"
+DAILY_CSV = DATA_DIR / "cape_daily.csv"
+LATEST_JSON = DATA_DIR / "cape_latest.json"
 HISTORY_RAW_CSV = DATA_DIR / "cape_history_raw.csv"
 HISTORY_FILLED_CSV = DATA_DIR / "cape_history_filled.csv"
 HISTORY_PARQUET = DATA_DIR / "cape_history.parquet"
@@ -24,25 +32,6 @@ OVERLAP_DAYS = 15
 MAX_RETRIES = 3
 RETRY_SECONDS = 5
 
-CORE_COLUMNS = [
-    "C5TC (182)",
-    "C5TC",
-    "BCI",
-    "C16_182",
-    "C3",
-    "C5",
-    "C3-TCE",
-    "C5-TCE",
-]
-DERIVED_COLUMNS = [
-    "C3_minus_C5",
-    "C3_div_C5",
-    "C3_TCE_minus_C5_TCE",
-    "C3_TCE_div_C5_TCE",
-    "C3_TCE_div_C5TC_182",
-    "C5_TCE_div_C5TC_182",
-]
-
 
 def log(message: str) -> None:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,6 +40,20 @@ def log(message: str) -> None:
     print(line)
     with BACKFILL_LOG.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+
+def _json_ready(value: Any) -> Any:
+    if pd.isna(value):
+        return None
+    return value
+
+
+def write_latest_from_daily(daily: pd.DataFrame) -> None:
+    latest = daily.sort_values("date").iloc[-1].to_dict()
+    latest = {key: _json_ready(value) for key, value in latest.items()}
+    with LATEST_JSON.open("w", encoding="utf-8") as handle:
+        json.dump(latest, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
 
 
 def build_windows(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -91,125 +94,16 @@ def request_window(start: pd.Timestamp, end: pd.Timestamp, headers: dict[str, st
     raise RuntimeError(f"window {params['from']} to {params['to']} failed after retries: {last_error}")
 
 
-def payload_to_long(payload: list[dict[str, Any]], window_label: str) -> pd.DataFrame:
-    records: list[dict[str, Any]] = []
-    for item in payload:
-        short_code = item.get("shortCode")
-        data = item.get("data")
-        if not short_code:
-            continue
-        if not isinstance(data, list):
-            log(f"Warning: {window_label} shortCode {short_code} has non-list data")
-            continue
-
-        for point in data:
-            if not isinstance(point, dict):
-                continue
-            records.append(
-                {
-                    "date": point.get("date"),
-                    "shortCode": str(short_code),
-                    "value": point.get("value"),
-                }
-            )
-
-    if not records:
-        return pd.DataFrame(columns=["date", "shortCode", "value"])
-
-    long = pd.DataFrame(records)
-    long["date"] = pd.to_datetime(long["date"], errors="coerce").dt.date.astype(str)
-    long["value"] = pd.to_numeric(long["value"], errors="coerce")
-    return long.dropna(subset=["date", "shortCode"])
-
-
-def calculate_derived(wide: pd.DataFrame) -> pd.DataFrame:
-    result = wide.copy()
-    for column in CORE_COLUMNS:
-        if column not in result.columns:
-            result[column] = pd.NA
-
-    c3 = pd.to_numeric(result["C3"], errors="coerce")
-    c5 = pd.to_numeric(result["C5"], errors="coerce")
-    c3_tce = pd.to_numeric(result["C3-TCE"], errors="coerce")
-    c5_tce = pd.to_numeric(result["C5-TCE"], errors="coerce")
-    c5tc_182 = pd.to_numeric(result["C5TC (182)"], errors="coerce")
-
-    result["C3_minus_C5"] = c3 - c5
-    result["C3_div_C5"] = (c3 / c5).where(c5 != 0)
-    result["C3_TCE_minus_C5_TCE"] = c3_tce - c5_tce
-    result["C3_TCE_div_C5_TCE"] = (c3_tce / c5_tce).where(c5_tce != 0)
-    result["C3_TCE_div_C5TC_182"] = (c3_tce / c5tc_182).where(c5tc_182 != 0)
-    result["C5_TCE_div_C5TC_182"] = (c5_tce / c5tc_182).where(c5tc_182 != 0)
-    return result
-
-
-def order_columns(frame: pd.DataFrame) -> list[str]:
-    extras = sorted(
-        column
-        for column in frame.columns
-        if column not in {"date"} | set(CORE_COLUMNS) | set(DERIVED_COLUMNS)
-    )
-    return ["date"] + CORE_COLUMNS + DERIVED_COLUMNS + extras
-
-
-def raw_order_columns(frame: pd.DataFrame) -> list[str]:
-    extras = sorted(column for column in frame.columns if column not in {"date"} | set(CORE_COLUMNS))
-    return ["date"] + CORE_COLUMNS + extras
-
-
-def long_to_raw_history(long: pd.DataFrame) -> pd.DataFrame:
-    if long.empty:
-        raise RuntimeError("No history rows were fetched")
-
-    deduped = long.drop_duplicates(subset=["date", "shortCode"], keep="last")
-    wide = deduped.pivot(index="date", columns="shortCode", values="value").reset_index()
-    wide.columns.name = None
-    for column in CORE_COLUMNS:
-        if column not in wide.columns:
-            wide[column] = pd.NA
-    return wide.reindex(columns=raw_order_columns(wide)).sort_values("date")
-
-
-def fill_history(raw_history: pd.DataFrame, calendar_start: pd.Timestamp) -> tuple[pd.DataFrame, dict[str, float]]:
-    raw = raw_history.copy()
-    raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
-    raw = raw.dropna(subset=["date"]).sort_values("date")
-    if raw.empty:
-        raise RuntimeError("Raw history has no valid dates")
-
-    latest = raw["date"].max()
-    calendar = pd.bdate_range(start=calendar_start.normalize(), end=latest.normalize())
-    raw_indexed = raw.set_index("date").sort_index()
-    raw_indexed.index = pd.to_datetime(raw_indexed.index)
-
-    missing_days_count = int(len(calendar.difference(raw_indexed.index.normalize().unique())))
-    reindexed = raw_indexed.reindex(calendar)
-    pre_fill_missing = int(reindexed.isna().sum().sum())
-    filled = reindexed.ffill()
-    post_fill_missing = int(filled.isna().sum().sum())
-    filled_cells = max(pre_fill_missing - post_fill_missing, 0)
-    total_cells = int(filled.shape[0] * filled.shape[1])
-    forward_filled_ratio = filled_cells / total_cells if total_cells else 0.0
-
-    filled = filled.reset_index().rename(columns={"index": "date"})
-    filled["date"] = filled["date"].dt.date.astype(str)
-    filled = calculate_derived(filled)
-    filled = filled.reindex(columns=order_columns(filled)).sort_values("date")
-    metrics = {
-        "missing_days_count": missing_days_count,
-        "forward_filled_ratio": forward_filled_ratio,
-    }
-    return filled, metrics
-
-
 def write_outputs(raw_history: pd.DataFrame, filled_history: pd.DataFrame, write_parquet: bool) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     raw_history.to_csv(HISTORY_RAW_CSV, index=False)
     filled_history.to_csv(HISTORY_FILLED_CSV, index=False)
-    filled_history.to_csv(HISTORY_CSV, index=False)
+    filled_history.to_csv(DAILY_CSV, index=False)
+    write_latest_from_daily(filled_history)
     log(f"Wrote {HISTORY_RAW_CSV} rows={len(raw_history)}")
     log(f"Wrote {HISTORY_FILLED_CSV} rows={len(filled_history)}")
-    log(f"Wrote legacy alias {HISTORY_CSV} rows={len(filled_history)}")
+    log(f"Initialized main daily file {DAILY_CSV} rows={len(filled_history)}")
+    log(f"Wrote latest file {LATEST_JSON}")
 
     if not write_parquet:
         return
@@ -250,7 +144,7 @@ def main() -> int:
         label = f"{window_start.date()} to {window_end.date()}"
         try:
             payload = request_window(window_start, window_end, headers)
-            long = payload_to_long(payload, label)
+            long = expand_api_payload_to_long(payload, source_label=label)
             window_frames.append(long)
             log(f"Fetched window {label} rows={len(long)}")
         except Exception as exc:
@@ -261,8 +155,8 @@ def main() -> int:
         raise RuntimeError("All backfill windows failed")
 
     all_long = pd.concat(window_frames, ignore_index=True)
-    raw_history = long_to_raw_history(all_long)
-    filled_history, fill_metrics = fill_history(raw_history, start)
+    raw_history = pivot_to_wide(all_long, include_derived=False)
+    filled_history, fill_metrics = finalize_daily_from_long(all_long, calendar_start=start)
     log(
         "Calendar alignment "
         f"missing_days_count={fill_metrics['missing_days_count']} "

@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from cape_transform import expand_api_payload_to_long
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DAILY_CSV = ROOT / "data" / "cape_daily.csv"
@@ -66,45 +68,6 @@ def _fetch_window() -> tuple[pd.Timestamp, pd.Timestamp, bool]:
     return date_from, today, first_run
 
 
-def _payload_to_wide_frame(payload: list[dict[str, Any]]) -> tuple[pd.DataFrame, list[str]]:
-    wide: pd.DataFrame | None = None
-    short_codes: list[str] = []
-
-    for item in payload:
-        short_code = item.get("shortCode")
-        data = item.get("data")
-        if not short_code:
-            continue
-        short_code = str(short_code)
-        short_codes.append(short_code)
-
-        if not isinstance(data, list):
-            print(f"Warning: shortCode {short_code} has no list data")
-            continue
-
-        frame = pd.DataFrame(data)
-        missing = {"date", "value"} - set(frame.columns)
-        if missing:
-            print(f"Warning: shortCode {short_code} data missing fields {sorted(missing)}")
-            continue
-
-        frame = frame[["date", "value"]].copy()
-        frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.date
-        frame[short_code] = pd.to_numeric(frame["value"], errors="coerce")
-        frame = frame.drop(columns=["value"]).dropna(subset=["date"])
-        frame = frame.drop_duplicates(subset=["date"], keep="last").set_index("date")
-
-        if wide is None:
-            wide = frame
-        else:
-            wide = wide.join(frame, how="outer")
-
-    if wide is None or wide.empty:
-        raise RuntimeError("Baltic API returned no parseable data rows")
-
-    return wide.sort_index().reset_index(), short_codes
-
-
 def fetch_baltic_data() -> tuple[pd.DataFrame, dict[str, Any]]:
     api_key = os.getenv("BALTIC_API_KEY")
     if not api_key:
@@ -118,7 +81,8 @@ def fetch_baltic_data() -> tuple[pd.DataFrame, dict[str, Any]]:
     }
 
     payload = _request_feed(BALTIC_FEED_URL, headers, params)
-    frame, short_codes = _payload_to_wide_frame(payload)
+    long = expand_api_payload_to_long(payload, source_label="daily fetch")
+    short_codes = sorted(long["shortCode"].dropna().unique().tolist()) if not long.empty else []
 
     print(f"Debug: feed id={BALTIC_FEED_ID}")
     print(f"Debug: fetch window={params['from']} to {params['to']}")
@@ -132,4 +96,4 @@ def fetch_baltic_data() -> tuple[pd.DataFrame, dict[str, Any]]:
         "fetch_from": params["from"],
         "fetch_to": params["to"],
     }
-    return frame, metadata
+    return long, metadata
