@@ -66,3 +66,4 @@
 2026-09-04T13:37:17Z success latest_date=2026-09-04 rows=960 missing_days_count=1 forward_filled_ratio=0.000000
 2026-09-05T12:52:03Z No new Baltic data latest_api_date=2026-09-04 latest_local_date=2026-09-04
 2026-09-06T12:58:07Z No new Baltic data latest_api_date=2026-09-04 latest_local_date=2026-09-04
+2026-09-07T15:07:47Z success latest_date=2026-09-07 rows=961 missing_days_count=1 forward_filled_ratio=0.000000
